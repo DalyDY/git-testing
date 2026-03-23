@@ -8,8 +8,6 @@ import tkinter as tk
 from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-import win32evtlog  # pywin32 required
-import xml.etree.ElementTree as ET
 
 # SETTINGS
 STARTUP_FOLDER = os.path.expanduser(
@@ -105,59 +103,8 @@ def add_to_startup():
     except Exception as e:
         log(f"Could not copy to startup: {e}")
 
-# SYSMon Integration
-def lookup_creator(file_path):
-    """
-    Query Sysmon logs (Event ID 11) to find which process created the given file.
-    """
-    logtype = "Microsoft-Windows-Sysmon/Operational"
-    query = "*[System/EventID=11]"
-
-    try:
-        events = win32evtlog.EvtQuery(logtype, win32evtlog.EvtQueryReverseDirection, query)
-        while True:
-            evts = win32evtlog.EvtNext(events, 10)
-            if not evts:
-                break
-            for evt in evts:
-                xml = win32evtlog.EvtRender(evt, win32evtlog.EvtRenderEventXml)
-                if file_path.lower() in xml.lower():
-                    try:
-                        root = ET.fromstring(xml)
-                        data = {d.attrib['Name']: d.text for d in root.findall(".//Data")}
-                        return data.get("Image", "Unknown process")
-                    except Exception:
-                        return "Unknown process"
-    except Exception as e:
-        log(f"Sysmon lookup failed: {e}")
-    return None
-
-def lookup_child_files(process_image):
-    logtype = "Microsoft-Windows-Sysmon/Operational"
-    query = "*[System/EventID=11]"
-    created_files = []
-
-    try:
-        events = win32evtlog.EvtQuery(logtype, win32evtlog.EvtQueryReverseDirection, query)
-        while True:
-            evts = win32evtlog.EvtNext(events, 20)
-            if not evts:
-                break
-            for evt in evts:
-                xml = win32evtlog.EvtRender(evt, win32evtlog.EvtRenderEventXml)
-                root = ET.fromstring(xml)
-                data = {d.attrib['Name']: d.text for d in root.findall(".//Data")}
-                image = data.get("Image", "").lower()
-                target = data.get("TargetFilename")
-                if process_image.lower() == image and target:
-                    created_files.append(target)
-    except Exception as e:
-        log(f"Sysmon child file lookup failed: {e}")
-
-    return created_files
-
 # DIALOG
-def ask_user(exe_path, creator=None, child_files=None):
+def ask_user(exe_path):
     root = tk.Tk()
     root.withdraw()
 
@@ -168,7 +115,7 @@ def ask_user(exe_path, creator=None, child_files=None):
     dlg.grab_set()
 
     sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
-    dlg.geometry(f"420x260+{(sw - 420) // 2}+{(sh - 260) // 2}")
+    dlg.geometry(f"420x200+{(sw - 420) // 2}+{(sh - 200) // 2}")
 
     tk.Label(dlg,
              text="Suspicious file in Startup folder:",
@@ -183,24 +130,6 @@ def ask_user(exe_path, creator=None, child_files=None):
              font=("Segoe UI", 8),
              fg="gray",
              wraplength=390).pack(pady=(0, 10))
-
-    if creator:
-        tk.Label(dlg,
-                 text=f"Created by: {creator}",
-                 font=("Segoe UI", 8),
-                 fg="blue",
-                 wraplength=390).pack(pady=(0, 10))
-
-    if child_files:
-        tk.Label(dlg,
-                 text="Files created by this process:",
-                 font=("Segoe UI", 9, "bold")).pack()
-        for f in child_files[:5]:  # show up to 5
-            tk.Label(dlg,
-                     text=f,
-                     font=("Segoe UI", 8),
-                     fg="purple",
-                     wraplength=390).pack()
 
     tk.Label(dlg,
              text="What do you want to do?",
@@ -272,9 +201,7 @@ def scan_loop():
         if suspects:
             log(f"Found {len(suspects)} suspicious file(s)")
             for exe_path in suspects:
-                creator = lookup_creator(exe_path)
-                child_files = lookup_child_files(exe_path)
-                action = ask_user(exe_path, creator, child_files)
+                action = ask_user(exe_path)
                 if action == "delete":
                     try:
                         os.remove(exe_path)
